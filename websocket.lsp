@@ -159,7 +159,8 @@
 								
 								(println  dataret)
 								(println (hextodecstr dataret))
-								(setq dataret (ws_send "helloback"))
+								(setq return_str (string dataret " back"))
+								(setq dataret (ws_send return_str))
 								(net-send connection dataret)
 								(println (hextodecstr dataret))
 								(setq dataret "")
@@ -168,6 +169,7 @@
 )
 
 (define (ws_send buff)
+	(println buff)
 	(setq message "")
 	(setq b1 0x80)
 	(setq b1 (| b1 0x01))
