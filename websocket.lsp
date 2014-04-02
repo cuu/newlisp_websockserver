@@ -1,9 +1,13 @@
+;; 2014 04 02 
+;; tested in linux chromium
+;; 
 (define-macro (build_uint16 hi low) (+ (& low 0x00ff) (<< (& hi 0x00ff) 8)))
 
-(setq port 80)
+(setq port 8080)
 
 (setq websocket_guid "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 (setq flag "\n")
+(setq global_status 1);;; global commiunication status 1 means normal text transfer, other means controling ,like close,ping,pong,etc
 
 (define (hextostring hex_buf); xxxxxxx to xx xx xx xx
 	(setq nr (length hex_buf))
@@ -65,10 +69,11 @@
 )
 (setq msg_len 0)
 (setq msg nil)
-(define (handle_shake buff)
+(define (handle_shake buff, ret)
 				(if
 				(= buff "\r\n") 
 					(begin
+					(println "start handle shake")
 					(setq combine_key (string key_code websocket_guid))
 
 					(println "combine_key: " combine_key)
@@ -79,12 +84,14 @@
 					(setq ret "")
 					(setq ret (append ret "HTTP/1.1 101 Switching Protocols\r\n"))
 					(setq ret (append ret "Upgrade: websocket\nConnection: Upgrade\r\n"))
-					(setq ret (append ret (string "Sec-WebSocket-Accept: " accept_code "\r\n")))
-					(setq ret (append ret "Sec-WebSocket-Protocol: chat\r\n\r\n"))
+					(setq ret (append ret (string "Sec-WebSocket-Accept: " accept_code "\r\n\r\n")))
+					;(setq ret (append ret "Sec-WebSocket-Protocol: chat\r\n\r\n")) ;; here is what we called additional protocol
+					;;;not send back this Sec-WebSocket-Protocol when the client did not send 
 					(print ret)
 					(net-send connection ret )
 					(setq ret "")
-					(setq flag nil)				
+					(setq flag nil)			
+					(println "shake over")	
 					)
 				(find "Sec-WebSocket-Key: " buff)
 					(begin
@@ -93,7 +100,7 @@
 							(begin
 								(setq key_code (chop (nth 1 tmplst) 2) )
 								;(setq key_code (nth 1 tmplst))
-								;(print "key_code: " key_code " " (length key_code))
+								(print "key_code: " key_code " " (length key_code))
 							)
 						)	
 			
@@ -101,13 +108,14 @@
 				)	
 )
 (define (handle_data buff)
-				(println "handle_data:" buff " length: " (length buff))
+				(println "handle_data: " buff " length: " (length buff))
 				(if (> (length buff) 3)
 							(begin
 								(setq fin (& (char (slice buff 0 1) ) 0x80))
 								(setq opcode (& (char (slice buff 0 1)) 0x0f))
 								(setq payload_start 2)
-								(if (= fin 128)
+								(println "opcode: " opcode)
+								(if (and (= fin 128) (< opcode 3))
 								(begin
 									(setq mask (& (nth 0 (unpack "b" (slice buff 1 1))) 0x80))
 									(setq msg_len_flag (& (nth 0 (unpack "b" (slice buff 1 1))) 0x7f))
@@ -150,26 +158,35 @@
 													)
 												)
 											)
-												
+										(setq global_status opcode)		
 										)
 									)
 								)
+								(and (= fin 128) (= opcode 8))
+								(begin
+									(println "closing wesocket")
+									(setq global_status 8)
+									(net-close connection)
+								)
 								(println "fin not 129:" fin)
 								)
-								
-								(println  dataret)
-								(println (hextodecstr dataret))
-								(setq return_str (string dataret " back"))
-								(setq dataret (ws_send return_str))
-								(net-send connection dataret)
-								(println (hextodecstr dataret))
-								(setq dataret "")
+								(if (= global_status 1)
+									(begin
+										(println  dataret)
+										(println (hextodecstr dataret))
+										(setq return_str (string dataret " back"))
+										(setq dataret (ws_send return_str))
+										(net-send connection dataret)
+										(println (hextodecstr dataret))
+										(setq dataret "")
+									)
+								)
 							)
 						)
 )
 
 (define (ws_send buff)
-	(println buff)
+	(println "ws_send: " buff)
 	(setq message "")
 	(setq b1 0x80)
 	(setq b1 (| b1 0x01))
@@ -207,6 +224,7 @@
 (print "Waiting for connection on: " port "\n")
 (while 1
 	(setq connection (net-accept listen))
+	;(println (net-peer connection))
 	(while (not (net-select connection "r" 1000)))
 		(while (net-select connection "w" 1000)
 			(setq buff "")
@@ -222,17 +240,17 @@
 					(extend msg  buff)
 				)
 			)	
-			(println "peek now" (net-peek connection))
+			(println "peek now " (net-peek connection))
 			(while (> (net-peek connection) 0)
 				(println "flag: " (char flag))
 			(if (not (nil? flag))
 				(begin
 					(setq rvlen  (net-receive connection buff 1024 flag))
+					(println buff)
 					(handle_shake buff)
 				)
 				(nil? flag)
 				(begin
-				
 					(setq rvlen  (net-receive connection buff 1024))
 					(extend msg buff)
 				)
@@ -244,7 +262,10 @@
 					(begin
 						(setq buff msg)
 						(setq msg nil)
-						(handle_data buff)
+						(println "nil flag")
+						(if (> (length buff) 0)
+							(handle_data buff)
+						)
 					)
 			)
 			
