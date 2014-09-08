@@ -1,239 +1,381 @@
-/* This code is public-domain - it is based on libcrypt 
- * 
+/*
+ *  FIPS-180-1 compliant SHA-1 implementation
+ *
+ *  Copyright (C) 2003-2006  Christophe Devine
+ *
+ *  This library is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU Lesser General Public
+ *  License, version 2.1 as published by the Free Software Foundation.
+ *
+ *  This library is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU Lesser General Public
+ *  License along with this library; if not, write to the Free Software
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
+ *  MA  02110-1301  USA
  */
-// gcc -Wall -DSHA1TEST -o sha1test sha1.c && ./sha1test
-#include <stdio.h>
-#include <stdint.h>
+/*
+ *  The SHA-1 standard was published by NIST in 1993.
+ *
+ *  http://www.itl.nist.gov/fipspubs/fip180-1.htm
+ */
+
+#ifndef _CRT_SECURE_NO_DEPRECATE
+#define _CRT_SECURE_NO_DEPRECATE 1
+#endif
+
 #include <string.h>
-
-/* header */
-
-#define HASH_LENGTH 20
-#define BLOCK_LENGTH 64
-
-union _buffer {
-	uint8_t b[BLOCK_LENGTH];
-	uint32_t w[BLOCK_LENGTH/4];
-};
-
-union _state {
-	uint8_t b[HASH_LENGTH];
-	uint32_t w[HASH_LENGTH/4];
-};
-
-typedef struct sha1nfo {
-	union _buffer buffer;
-	uint8_t bufferOffset;
-	union _state state;
-	uint32_t byteCount;
-	uint8_t keyBuffer[BLOCK_LENGTH];
-	uint8_t innerHash[HASH_LENGTH];
-} sha1nfo;
-
-/* public API - prototypes - TODO: doxygen*/
-
-/**
- */
-void sha1_init(sha1nfo *s);
-/**
- */
-void sha1_writebyte(sha1nfo *s, uint8_t data);
-/**
- */
-void sha1_write(sha1nfo *s, const char *data, size_t len);
-/**
- */
-uint8_t* sha1_result(sha1nfo *s);
-/**
- */
-void sha1_initHmac(sha1nfo *s, const uint8_t* key, int keyLength);
-/**
- */
-uint8_t* sha1_resultHmac(sha1nfo *s);
-
-
-/* code */
-#define SHA1_K0 0x5a827999
-#define SHA1_K20 0x6ed9eba1
-#define SHA1_K40 0x8f1bbcdc
-#define SHA1_K60 0xca62c1d6
-
-const uint8_t sha1InitState[] = {
-  0x01,0x23,0x45,0x67, // H0
-  0x89,0xab,0xcd,0xef, // H1
-  0xfe,0xdc,0xba,0x98, // H2
-  0x76,0x54,0x32,0x10, // H3
-  0xf0,0xe1,0xd2,0xc3  // H4
-};
-
-void sha1_init(sha1nfo *s) {
-  memcpy(s->state.b,sha1InitState,HASH_LENGTH);
-  s->byteCount = 0;
-  s->bufferOffset = 0;
-}
-
-uint32_t sha1_rol32(uint32_t number, uint8_t bits) {
-  return ((number << bits) | (number >> (32-bits)));
-}
-
-void sha1_hashBlock(sha1nfo *s) {
-  uint8_t i;
-  uint32_t a,b,c,d,e,t;
-
-  a=s->state.w[0];
-  b=s->state.w[1];
-  c=s->state.w[2];
-  d=s->state.w[3];
-  e=s->state.w[4];
-  for (i=0; i<80; i++) {
-    if (i>=16) {
-      t = s->buffer.w[(i+13)&15] ^ s->buffer.w[(i+8)&15] ^ s->buffer.w[(i+2)&15] ^ s->buffer.w[i&15];
-      s->buffer.w[i&15] = sha1_rol32(t,1);
-    }
-    if (i<20) {
-      t = (d ^ (b & (c ^ d))) + SHA1_K0;
-    } else if (i<40) {
-      t = (b ^ c ^ d) + SHA1_K20;
-    } else if (i<60) {
-      t = ((b & c) | (d & (b | c))) + SHA1_K40;
-    } else {
-      t = (b ^ c ^ d) + SHA1_K60;
-    }
-    t+=sha1_rol32(a,5) + e + s->buffer.w[i&15];
-    e=d;
-    d=c;
-    c=sha1_rol32(b,30);
-    b=a;
-    a=t;
-  }
-  s->state.w[0] += a;
-  s->state.w[1] += b;
-  s->state.w[2] += c;
-  s->state.w[3] += d;
-  s->state.w[4] += e;
-}
-
-void sha1_addUncounted(sha1nfo *s, uint8_t data) {
-  s->buffer.b[s->bufferOffset ^ 3] = data;
-  s->bufferOffset++;
-  if (s->bufferOffset == BLOCK_LENGTH) {
-    sha1_hashBlock(s);
-    s->bufferOffset = 0;
-  }
-}
-
-void sha1_writebyte(sha1nfo *s, uint8_t data) {
-  ++s->byteCount;
-  sha1_addUncounted(s, data);
-}
-
-void sha1_write(sha1nfo *s, const char *data, size_t len) {
-	for (;len--;) sha1_writebyte(s, (uint8_t) *data++);
-}
-
-void sha1_pad(sha1nfo *s) {
-  // Implement SHA-1 padding (fips180-2 §5.1.1)
-
-  // Pad with 0x80 followed by 0x00 until the end of the block
-  sha1_addUncounted(s, 0x80);
-  while (s->bufferOffset != 56) sha1_addUncounted(s, 0x00);
-
-  // Append length in the last 8 bytes
-  sha1_addUncounted(s, 0); // We're only using 32 bit lengths
-  sha1_addUncounted(s, 0); // But SHA-1 supports 64 bit lengths
-  sha1_addUncounted(s, 0); // So zero pad the top bits
-  sha1_addUncounted(s, s->byteCount >> 29); // Shifting to multiply by 8
-  sha1_addUncounted(s, s->byteCount >> 21); // as SHA-1 supports bitstreams as well as
-  sha1_addUncounted(s, s->byteCount >> 13); // byte.
-  sha1_addUncounted(s, s->byteCount >> 5);
-  sha1_addUncounted(s, s->byteCount << 3);
-}
-
-uint8_t* sha1_result(sha1nfo *s) {
-  int i;
-  // Pad to complete the last block
-  sha1_pad(s);
-  
-  // Swap byte order back
-  for (i=0; i<5; i++) {
-    uint32_t a,b;
-    a=s->state.w[i];
-    b=a<<24;
-    b|=(a<<8) & 0x00ff0000;
-    b|=(a>>8) & 0x0000ff00;
-    b|=a>>24;
-    s->state.w[i]=b;
-  }
-  
-  // Return pointer to hash (20 characters)
-  return s->state.b;
-}
-
-#define HMAC_IPAD 0x36
-#define HMAC_OPAD 0x5c
-
-void sha1_initHmac(sha1nfo *s, const uint8_t* key, int keyLength) {
-  uint8_t i;
-  memset(s->keyBuffer, 0, BLOCK_LENGTH);
-  if (keyLength > BLOCK_LENGTH) {
-    // Hash long keys
-    sha1_init(s);
-    for (;keyLength--;) sha1_writebyte(s, *key++);
-    memcpy(s->keyBuffer, sha1_result(s), HASH_LENGTH);
-  } else {
-    // Block length keys are used as is
-    memcpy(s->keyBuffer, key, keyLength);
-  }
-  // Start inner hash
-  sha1_init(s);
-  for (i=0; i<BLOCK_LENGTH; i++) {
-    sha1_writebyte(s, s->keyBuffer[i] ^ HMAC_IPAD);
-  }
-}
-
-uint8_t* sha1_resultHmac(sha1nfo *s) {
-  uint8_t i;
-  // Complete inner hash
-  memcpy(s->innerHash,sha1_result(s),HASH_LENGTH);
-  // Calculate outer hash
-  sha1_init(s);
-  for (i=0; i<BLOCK_LENGTH; i++) sha1_writebyte(s, s->keyBuffer[i] ^ HMAC_OPAD);
-  for (i=0; i<HASH_LENGTH; i++) sha1_writebyte(s, s->innerHash[i]);
-  return sha1_result(s);
-}
-
-/* self-test */
-
-#if SHA1TEST
 #include <stdio.h>
 
-uint8_t hmacKey1[]={
-   0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
-   0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f,
-   0x20,0x21,0x22,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2a,0x2b,0x2c,0x2d,0x2e,0x2f,
-   0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f
-};
-uint8_t hmacKey2[]={
-   0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3a,0x3b,0x3c,0x3d,0x3e,0x3f,
-   0x40,0x41,0x42,0x43
-};
-uint8_t hmacKey3[]={
-   0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5a,0x5b,0x5c,0x5d,0x5e,0x5f,
-   0x60,0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68,0x69,0x6a,0x6b,0x6c,0x6d,0x6e,0x6f,
-   0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f,
-   0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0x8c,0x8d,0x8e,0x8f,
-   0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9a,0x9b,0x9c,0x9d,0x9e,0x9f,
-   0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0xa6,0xa7,0xa8,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,
-   0xb0,0xb1,0xb2,0xb3
-};
-uint8_t hmacKey4[]={
-   0x70,0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78,0x79,0x7a,0x7b,0x7c,0x7d,0x7e,0x7f,
-   0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8a,0x8b,0x8c,0x8d,0x8e,0x8f,
-   0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9a,0x9b,0x9c,0x9d,0x9e,0x9f,
-   0xa0
+#include "sha1.h"
+
+/* 
+ * 32-bit integer manipulation macros (big endian)
+ */
+#ifndef GET_UINT32_BE
+#define GET_UINT32_BE(n,b,i)                    \
+{                                               \
+    (n) = ( (ulong) (b)[(i)    ] << 24 )        \
+        | ( (ulong) (b)[(i) + 1] << 16 )        \
+        | ( (ulong) (b)[(i) + 2] <<  8 )        \
+        | ( (ulong) (b)[(i) + 3]       );       \
+}
+#endif
+#ifndef PUT_UINT32_BE
+#define PUT_UINT32_BE(n,b,i)                    \
+{                                               \
+    (b)[(i)    ] = (uchar) ( (n) >> 24 );       \
+    (b)[(i) + 1] = (uchar) ( (n) >> 16 );       \
+    (b)[(i) + 2] = (uchar) ( (n) >>  8 );       \
+    (b)[(i) + 3] = (uchar) ( (n)       );       \
+}
+#endif
+
+/*
+ * Core SHA-1 functions
+ */
+void sha1_starts( sha1_context *ctx )
+{
+    ctx->total[0] = 0;
+    ctx->total[1] = 0;
+
+    ctx->state[0] = 0x67452301;
+    ctx->state[1] = 0xEFCDAB89;
+    ctx->state[2] = 0x98BADCFE;
+    ctx->state[3] = 0x10325476;
+    ctx->state[4] = 0xC3D2E1F0;
+}
+
+void sha1_process( sha1_context *ctx, uchar data[64] )
+{
+    ulong temp, W[16], A, B, C, D, E;
+
+    GET_UINT32_BE( W[0],  data,  0 );
+    GET_UINT32_BE( W[1],  data,  4 );
+    GET_UINT32_BE( W[2],  data,  8 );
+    GET_UINT32_BE( W[3],  data, 12 );
+    GET_UINT32_BE( W[4],  data, 16 );
+    GET_UINT32_BE( W[5],  data, 20 );
+    GET_UINT32_BE( W[6],  data, 24 );
+    GET_UINT32_BE( W[7],  data, 28 );
+    GET_UINT32_BE( W[8],  data, 32 );
+    GET_UINT32_BE( W[9],  data, 36 );
+    GET_UINT32_BE( W[10], data, 40 );
+    GET_UINT32_BE( W[11], data, 44 );
+    GET_UINT32_BE( W[12], data, 48 );
+    GET_UINT32_BE( W[13], data, 52 );
+    GET_UINT32_BE( W[14], data, 56 );
+    GET_UINT32_BE( W[15], data, 60 );
+
+#define S(x,n) ((x << n) | ((x & 0xFFFFFFFF) >> (32 - n)))
+
+#define R(t)                                            \
+(                                                       \
+    temp = W[(t -  3) & 0x0F] ^ W[(t - 8) & 0x0F] ^     \
+           W[(t - 14) & 0x0F] ^ W[ t      & 0x0F],      \
+    ( W[t & 0x0F] = S(temp,1) )                         \
+)
+
+#define P(a,b,c,d,e,x)                                  \
+{                                                       \
+    e += S(a,5) + F(b,c,d) + K + x; b = S(b,30);        \
+}
+
+    A = ctx->state[0];
+    B = ctx->state[1];
+    C = ctx->state[2];
+    D = ctx->state[3];
+    E = ctx->state[4];
+
+#define F(x,y,z) (z ^ (x & (y ^ z)))
+#define K 0x5A827999
+
+    P( A, B, C, D, E, W[0]  );
+    P( E, A, B, C, D, W[1]  );
+    P( D, E, A, B, C, W[2]  );
+    P( C, D, E, A, B, W[3]  );
+    P( B, C, D, E, A, W[4]  );
+    P( A, B, C, D, E, W[5]  );
+    P( E, A, B, C, D, W[6]  );
+    P( D, E, A, B, C, W[7]  );
+    P( C, D, E, A, B, W[8]  );
+    P( B, C, D, E, A, W[9]  );
+    P( A, B, C, D, E, W[10] );
+    P( E, A, B, C, D, W[11] );
+    P( D, E, A, B, C, W[12] );
+    P( C, D, E, A, B, W[13] );
+    P( B, C, D, E, A, W[14] );
+    P( A, B, C, D, E, W[15] );
+    P( E, A, B, C, D, R(16) );
+    P( D, E, A, B, C, R(17) );
+    P( C, D, E, A, B, R(18) );
+    P( B, C, D, E, A, R(19) );
+
+#undef K
+#undef F
+
+#define F(x,y,z) (x ^ y ^ z)
+#define K 0x6ED9EBA1
+
+    P( A, B, C, D, E, R(20) );
+    P( E, A, B, C, D, R(21) );
+    P( D, E, A, B, C, R(22) );
+    P( C, D, E, A, B, R(23) );
+    P( B, C, D, E, A, R(24) );
+    P( A, B, C, D, E, R(25) );
+    P( E, A, B, C, D, R(26) );
+    P( D, E, A, B, C, R(27) );
+    P( C, D, E, A, B, R(28) );
+    P( B, C, D, E, A, R(29) );
+    P( A, B, C, D, E, R(30) );
+    P( E, A, B, C, D, R(31) );
+    P( D, E, A, B, C, R(32) );
+    P( C, D, E, A, B, R(33) );
+    P( B, C, D, E, A, R(34) );
+    P( A, B, C, D, E, R(35) );
+    P( E, A, B, C, D, R(36) );
+    P( D, E, A, B, C, R(37) );
+    P( C, D, E, A, B, R(38) );
+    P( B, C, D, E, A, R(39) );
+
+#undef K
+#undef F
+
+#define F(x,y,z) ((x & y) | (z & (x | y)))
+#define K 0x8F1BBCDC
+
+    P( A, B, C, D, E, R(40) );
+    P( E, A, B, C, D, R(41) );
+    P( D, E, A, B, C, R(42) );
+    P( C, D, E, A, B, R(43) );
+    P( B, C, D, E, A, R(44) );
+    P( A, B, C, D, E, R(45) );
+    P( E, A, B, C, D, R(46) );
+    P( D, E, A, B, C, R(47) );
+    P( C, D, E, A, B, R(48) );
+    P( B, C, D, E, A, R(49) );
+    P( A, B, C, D, E, R(50) );
+    P( E, A, B, C, D, R(51) );
+    P( D, E, A, B, C, R(52) );
+    P( C, D, E, A, B, R(53) );
+    P( B, C, D, E, A, R(54) );
+    P( A, B, C, D, E, R(55) );
+    P( E, A, B, C, D, R(56) );
+    P( D, E, A, B, C, R(57) );
+    P( C, D, E, A, B, R(58) );
+    P( B, C, D, E, A, R(59) );
+
+#undef K
+#undef F
+
+#define F(x,y,z) (x ^ y ^ z)
+#define K 0xCA62C1D6
+
+    P( A, B, C, D, E, R(60) );
+    P( E, A, B, C, D, R(61) );
+    P( D, E, A, B, C, R(62) );
+    P( C, D, E, A, B, R(63) );
+    P( B, C, D, E, A, R(64) );
+    P( A, B, C, D, E, R(65) );
+    P( E, A, B, C, D, R(66) );
+    P( D, E, A, B, C, R(67) );
+    P( C, D, E, A, B, R(68) );
+    P( B, C, D, E, A, R(69) );
+    P( A, B, C, D, E, R(70) );
+    P( E, A, B, C, D, R(71) );
+    P( D, E, A, B, C, R(72) );
+    P( C, D, E, A, B, R(73) );
+    P( B, C, D, E, A, R(74) );
+    P( A, B, C, D, E, R(75) );
+    P( E, A, B, C, D, R(76) );
+    P( D, E, A, B, C, R(77) );
+    P( C, D, E, A, B, R(78) );
+    P( B, C, D, E, A, R(79) );
+
+#undef K
+#undef F
+
+    ctx->state[0] += A;
+    ctx->state[1] += B;
+    ctx->state[2] += C;
+    ctx->state[3] += D;
+    ctx->state[4] += E;
+}
+
+void sha1_update( sha1_context *ctx, uchar *input, uint length )
+{
+    ulong left, fill;
+
+    if( ! length ) return;
+
+    left = ctx->total[0] & 0x3F;
+    fill = 64 - left;
+
+    ctx->total[0] += length;
+    ctx->total[0] &= 0xFFFFFFFF;
+
+    if( ctx->total[0] < length )
+        ctx->total[1]++;
+
+    if( left && length >= fill )
+    {
+        memcpy( (void *) (ctx->buffer + left),
+                (void *) input, fill );
+        sha1_process( ctx, ctx->buffer );
+        length -= fill;
+        input  += fill;
+        left = 0;
+    }
+
+    while( length >= 64 )
+    {
+        sha1_process( ctx, input );
+        length -= 64;
+        input  += 64;
+    }
+
+    if( length )
+    {
+        memcpy( (void *) (ctx->buffer + left),
+                (void *) input, length );
+    }
+}
+
+static uchar sha1_padding[64] =
+{
+ 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-void printHash(uint8_t* hash) {
+void sha1_finish( sha1_context *ctx, uchar digest[20] )
+{
+    ulong last, padn;
+    ulong high, low;
+    uchar msglen[8];
+
+    high = ( ctx->total[0] >> 29 )
+         | ( ctx->total[1] <<  3 );
+    low  = ( ctx->total[0] <<  3 );
+
+    PUT_UINT32_BE( high, msglen, 0 );
+    PUT_UINT32_BE( low,  msglen, 4 );
+
+    last = ctx->total[0] & 0x3F;
+    padn = ( last < 56 ) ? ( 56 - last ) : ( 120 - last );
+
+    sha1_update( ctx, sha1_padding, padn );
+    sha1_update( ctx, msglen, 8 );
+
+    PUT_UINT32_BE( ctx->state[0], digest,  0 );
+    PUT_UINT32_BE( ctx->state[1], digest,  4 );
+    PUT_UINT32_BE( ctx->state[2], digest,  8 );
+    PUT_UINT32_BE( ctx->state[3], digest, 12 );
+    PUT_UINT32_BE( ctx->state[4], digest, 16 );
+}
+
+/*
+ * Output SHA-1(file contents), returns 0 if successful.
+ */
+int sha1_file( char *filename, uchar digest[20] )
+{
+    FILE *f;
+    size_t n;
+    sha1_context ctx;
+    uchar buf[1024];
+
+    if( ( f = fopen( filename, "rb" ) ) == NULL )
+        return( 1 );
+
+    sha1_starts( &ctx );
+
+    while( ( n = fread( buf, 1, sizeof( buf ), f ) ) > 0 )
+        sha1_update( &ctx, buf, (uint) n );
+
+    sha1_finish( &ctx, digest );
+
+    fclose( f );
+    return( 0 );
+}
+
+/*
+ * Output SHA-1(buf)
+ */
+void sha1_csum( uchar *buf, uint buflen, uchar digest[20] )
+{
+    sha1_context ctx;
+
+    sha1_starts( &ctx );
+    sha1_update( &ctx, buf, buflen );
+    sha1_finish( &ctx, digest );
+}
+
+/*
+ * Output HMAC-SHA-1(key,buf)
+ */
+void sha1_hmac( uchar *key, uint keylen, uchar *buf, uint buflen,
+                uchar digest[20] )
+{
+    uint i;
+    sha1_context ctx;
+    uchar k_ipad[64];
+    uchar k_opad[64];
+    uchar tmpbuf[20];
+
+    memset( k_ipad, 0x36, 64 );
+    memset( k_opad, 0x5C, 64 );
+
+    for( i = 0; i < keylen; i++ )
+    {
+        if( i >= 64 ) break;
+
+        k_ipad[i] ^= key[i];
+        k_opad[i] ^= key[i];
+    }
+
+    sha1_starts( &ctx );
+    sha1_update( &ctx, k_ipad, 64 );
+    sha1_update( &ctx, buf, buflen );
+    sha1_finish( &ctx, tmpbuf );
+
+    sha1_starts( &ctx );
+    sha1_update( &ctx, k_opad, 64 );
+    sha1_update( &ctx, tmpbuf, 20 );
+    sha1_finish( &ctx, digest );
+
+    memset( k_ipad, 0, 64 );
+    memset( k_opad, 0, 64 );
+    memset( tmpbuf, 0, 20 );
+    memset( &ctx, 0, sizeof( sha1_context ) );
+}
+
+
+void printHash(unsigned char* hash) 
+{
   int i;
   for (i=0; i<20; i++) {
     printf("%02x", hash[i]);
@@ -241,17 +383,47 @@ void printHash(uint8_t* hash) {
   printf("\n");
 }
 
+#ifdef TEST
+/* 
+ * FIPS-180-1 test vectors
+ */
 
-int main (int argc, char **argv) 
+/*
+ * Checkup routine
+ */
+int main( int argc,char*argv[] )
 {
-	sha1nfo s;
+    uchar sha1sum[20];
+    sha1_context ctx;
 
 	if(argc > 1)
 	{
-		sha1_init(&s);
-		sha1_write(&s, argv[1], strlen(argv[1]));
-		printHash(sha1_result(&s));
-	}	
+		sha1_starts( &ctx );
+		sha1_update(&ctx, (uchar*)argv[1], strlen(argv[1]));
+		sha1_finish(&ctx, sha1sum);
+		printHash(sha1sum);
+	}else
+	{
+		printf("./me something\n");
+	}
 	return 0;
 }
-#endif /* self-test */
+#elif defined(SHARE)
+uchar sha1sum[20];
+
+unsigned char* sha1_string (char *buff)
+{
+	sha1_context ctx;
+	sha1_starts( &ctx );
+	sha1_update(&ctx, buff, strlen(buff));
+	sha1_finish(&ctx, sha1sum);
+	return (unsigned char*)&sha1sum;
+}
+
+#else
+int main( void )
+{
+    printf( "SHA-1 self-test not available\n\n" );
+    return( 1 );
+}
+#endif

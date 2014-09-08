@@ -3,83 +3,64 @@
 ;; 
 (define-macro (build_uint16 hi low) (+ (& low 0x00ff) (<< (& hi 0x00ff) 8)))
 
-(setq port 8080)
+(setq port "8080")
+
+(if-not  (file? "/home/cuu/Documents/newlisp_websockserver/sha1.so")
+	(begin (println "no sha1 library") (exit) )
+)
+(import "/home/cuu/Documents/newlisp_websockserver/sha1.so" "sha1_string")
 
 (setq websocket_guid "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 (setq flag "\n")
 (setq global_status 1);;; global commiunication status 1 means normal text transfer, other means controling ,like close,ping,pong,etc
 
-(define (hextostring hex_buf); xxxxxxx to xx xx xx xx
-	(setq nr (length hex_buf))
-	;(assert "hextostring length: " nr "\n")
-	(setq ret nil)
-	(setq dupstr (dup "b " nr))
-	
-	(if (> (length dupstr) 1)
-		(begin
-			(setq dupstr (chop dupstr 1))
-	
-		(setq upk_lst (unpack dupstr hex_buf))
-
-		(dolist (y upk_lst)
-			(extend ret (format "%02x " y))
-		)
-	
-		(setq ret (chop ret 1))
-		)
+(define (hex2string hex_buf)
+	(if-not (nil? hex_buf)
+		(join (map (fn (x) (format "%02x" x)) (unpack (dup "b "  (length hex_buf)) hex_buf)) " ")
 	)
-	ret
 )
+
+(define (hex2str hex_buf);; no space version
+   (if-not (nil? hex_buf)
+      (join (map (fn (x) (format "%02x" x)) (unpack (dup "b "  (length hex_buf)) hex_buf)) )
+   )
+)
+
+(define (string2hex str_buf, map_buff)
+   (if-not (nil? str_buf)
+      (begin
+         (setq map_buff (map (fn (x) (int x 0 16)) (explode str_buf 2)))
+         (pack (dup "b " (length map_buff)) map_buff)
+      )
+   )
+)
+
 
 (define (hextodecstr hex_buf); 
-        (setq nr (length hex_buf))
-        (setq ret nil)
-        (setq dupstr (dup "b " nr))
-
-        (if (> (length dupstr) 1)
-                (begin
-                        (setq dupstr (chop dupstr 1))
-
-                (setq upk_lst (unpack dupstr hex_buf))
-
-                (dolist (y upk_lst)
-                        (extend ret (format "%d " y))
-                )
-
-                (setq ret (chop ret 1))
-                )
-        )
-	ret
+	(if-not (nil? hex_buf)
+		(join (map (fn (x) (format "%d" x)) (unpack (dup "b "  (length hex_buf)) hex_buf)) " ")
+	)
 )
 
-(define (stringtohex str)
-        (setq len (length str))
-        (setq pos 0)
-        (setq ret nil)
-        (while (< pos len)
-                (setq tmp (slice str pos 2))
-                (extend ret (string (int tmp 0 16)))
-                (extend ret " ")
-                (++ pos) (++ pos)
-        )
-        (setq dup_str (dup "b " (/ len 2)))
-        (setq pack_str (string "(pack \"" dup_str "\" " ret ")"))
-        (setq ret (eval-string pack_str))
-        ret
-)
-(setq msg_len 0)
-(setq msg nil)
-(define (handle_shake buff, ret)
+(define (handle_shake buff, ret tmplst tmplst2 key_code combine_key sha1_code accept_code)
+	(if (not (nil? buff))
+		(begin
+			(setq tmplst (parse buff "\r\n"))
+			(dolist (x tmplst)
 				(if
-				(= buff "\r\n") 
+				(= $idx (- (length tmplst) 1) ) 
 					(begin
 					(println "start handle shake")
 					(setq combine_key (string key_code websocket_guid))
 
 					(println "combine_key: " combine_key)
-					(setq sha1_code (nth 0 (exec (string "./sha1test " combine_key))))
-					(println "sha1_code: " sha1_code)
-					(setq accept_code (base64-enc (stringtohex sha1_code)))
+					;(setq sha1_code (nth 0 (exec (string "./sha1test " combine_key))))
+
+					(setq sha1_code (join (map (fn (x) (char x)) (unpack (dup "c " 20) (sha1_string combine_key)) )))
+
+					(println "sha1_code: " (hex2string sha1_code))
+					;(setq accept_code (base64-enc (string2hex sha1_code)))
+					(setq accept_code (base64-enc sha1_code))
 					(println "accept_code: " accept_code)
 					(setq ret "")
 					(setq ret (append ret "HTTP/1.1 101 Switching Protocols\r\n"))
@@ -87,27 +68,28 @@
 					(setq ret (append ret (string "Sec-WebSocket-Accept: " accept_code "\r\n\r\n")))
 					;(setq ret (append ret "Sec-WebSocket-Protocol: chat\r\n\r\n")) ;; here is what we called additional protocol
 					;;;not send back this Sec-WebSocket-Protocol when the client did not send 
-					(print ret)
-					(net-send connection ret )
-					(setq ret "")
-					(setq flag nil)			
+					(println ret)
+					;(net-send connection ret )
+					(net_epoll_write  (net_epoll_get_fd) ret (length ret))
 					(println "shake over")	
 					)
-				(find "Sec-WebSocket-Key: " buff)
+				(find "Sec-WebSocket-Key: " x)
 					(begin
-						(setq tmplst (parse buff " "))
-						(if (> (length tmplst) 1)
+						(setq tmplst2 (parse x " "))
+						(if (> (length tmplst2) 1)
 							(begin
-								(setq key_code (chop (nth 1 tmplst) 2) )
-								;(setq key_code (nth 1 tmplst))
-								(print "key_code: " key_code " " (length key_code))
+								(setq key_code  (nth 1 tmplst2) )
+								(println "key_code: " key_code " :" (length key_code))
 							)
 						)	
 			
 					)
-				)	
+				)
+			)
+		)
+	)	
 )
-(define (handle_data buff)
+(define (handle_data buff,fin opcode payload_start mask static_status (dataret  "") return_str msg_len msg_len_flag)
 				(println "handle_data: " buff " length: " (length buff))
 				(if (> (length buff) 3)
 							(begin
@@ -158,34 +140,42 @@
 													)
 												)
 											)
-										(setq global_status opcode)		
+										(setq static_status opcode)		
 										)
 									)
 								)
 								(and (= fin 128) (= opcode 8))
 								(begin
 									(println "closing wesocket")
-									(setq global_status 8)
-									(net-close connection)
+									;(net-close connection)
+									(make_socket_blocking (net_epoll_get_fd))
+									;(close (net_epoll_get_fd))
+									(kill_fd (net_epoll_get_fd))
 								)
-								(println "fin not 129:" fin)
+								(begin
+									(println "fin not 129: " fin " " opcode)
+									;(close (net_epoll_get_fd))
+									;(kill_fd (net_epoll_get_fd))
+									
 								)
-								(if (= global_status 1)
+								)
+
+								(if (= static_status 0x01)
 									(begin
 										(println  dataret)
 										(println (hextodecstr dataret))
 										(setq return_str (string dataret " back"))
 										(setq dataret (ws_send return_str))
-										(net-send connection dataret)
+										;(net-send connection dataret)
+										(net_epoll_write (net_epoll_get_fd) dataret (length dataret))
 										(println (hextodecstr dataret))
-										(setq dataret "")
 									)
 								)
 							)
 						)
 )
 
-(define (ws_send buff)
+(define (ws_send buff, b1 message b2 len n )
 	(println "ws_send: " buff)
 	(setq message "")
 	(setq b1 0x80)
@@ -216,17 +206,20 @@
 					
 )
 
-(set 'listen (net-listen port))
-(unless listen (begin
-    (print "listening failed\n")
-    (exit)))
+;(set 'listen (net-listen port))
+;(unless listen (begin
+;   (print "listening failed\n")
+;    (exit)))
 
-(print "Waiting for connection on: " port "\n")
+;(print "Waiting for connection on: " port "\n")
+
+(define (websocket_server ,connection buff)
 (while 1
 	(setq connection (net-accept listen))
-	;(println (net-peer connection))
-	(while (not (net-select connection "r" 1000)))
-		(while (net-select connection "w" 1000)
+	(println (net-peer connection))
+	(while (not (net-select connection "r" 100000))  (println "waiting for reading...") )
+		;(while (net-select connection "w" 100000)
+		(while (not (net-error))
 			(setq buff "")
 			
 			(if (not (nil? flag))
@@ -236,10 +229,14 @@
 				)
 				(nil? flag)
 				(begin
+					(println "net-receive flag nil")
 					(setq rvlen  (net-receive connection buff 1024))
+					(println "net-receive flag nil rvlen " rvlen)
 					(extend msg  buff)
 				)
-			)	
+			)
+			(println "net-error: " (net-error))
+
 			(println "peek now " (net-peek connection))
 			(while (> (net-peek connection) 0)
 				(println "flag: " (char flag))
@@ -265,6 +262,7 @@
 						(println "nil flag")
 						(if (> (length buff) 0)
 							(handle_data buff)
+							(println "(length buff)<= 0 " (length buff))
 						)
 					)
 			)
@@ -276,3 +274,7 @@
 	(setq flag "\n")
 	(net-close connection)	
 )
+)
+
+
+
