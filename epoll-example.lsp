@@ -12,6 +12,8 @@
 (import sofile "epoll_sfd_cmp")
 (import sofile "kill_fd")
 (import sofile "make_socket_blocking")
+
+(load "/home/cuu/Documents/openwrt_zigbee_lsp_file/myfunc.lsp")
 (load "/home/cuu/Documents/newlisp_websockserver/websocket.lsp")
 
 (setq while_break nil)
@@ -20,6 +22,7 @@
 
 (define (epoll_websocket_process, buff (msg "") n rvlen)
 (while true
+
 	(setq n (net_epoll_wait))
 	(for (i 0 (- n 1))
 		(epoll_set_fd_index i)
@@ -64,7 +67,7 @@
 					)
 				)
 				(setq while_break nil) ;; reset while break flag
-				(if (= rvlen 0) ;; nil or 0
+				(if (or (nil? buff) (= rvlen 0)) ;; nil or 0
 					(begin
 						(println "Closed connection on descriptor " (net_epoll_get_fd) "\n")
 						(close (net_epoll_get_fd))

@@ -28,6 +28,8 @@ int net_epoll_get_fd();
 void net_epoll_close();
 int epoll_check_events_flags();
 int epoll_sfd_cmp( int );
+int epoll_ctl_add_fd( int _fd);
+int epoll_ctl_del_fd( int _fd);
 
 int kill_fd(int );
 

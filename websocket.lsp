@@ -7,8 +7,8 @@
 
 (if-not  (file? "/home/cuu/Documents/newlisp_websockserver/sha1.so")
 	(begin (println "no sha1 library") (exit) )
+	(import "/home/cuu/Documents/newlisp_websockserver/sha1.so" "sha1_string")
 )
-(import "/home/cuu/Documents/newlisp_websockserver/sha1.so" "sha1_string")
 
 (setq websocket_guid "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 (setq flag "\n")
@@ -148,15 +148,12 @@
 								(begin
 									(println "closing wesocket")
 									;(net-close connection)
-									(make_socket_blocking (net_epoll_get_fd))
-									;(close (net_epoll_get_fd))
+									
+									(close (net_epoll_get_fd))
 									(kill_fd (net_epoll_get_fd))
 								)
 								(begin
-									(println "fin not 129: " fin " " opcode)
-									;(close (net_epoll_get_fd))
-									;(kill_fd (net_epoll_get_fd))
-									
+									(println "fin not 129: " fin " " opcode)									
 								)
 								)
 
@@ -164,11 +161,12 @@
 									(begin
 										(println  dataret)
 										(println (hextodecstr dataret))
-										(setq return_str (string dataret " back"))
-										(setq dataret (ws_send return_str))
-										;(net-send connection dataret)
+										(setq serial_str (to_modbus dataret))
+										(write_serial serial_str (length serial_str))
+
+										(setq dataret (ws_send (hex2string serial_str)))
 										(net_epoll_write (net_epoll_get_fd) dataret (length dataret))
-										(println (hextodecstr dataret))
+										;(println (hextodecstr dataret))
 									)
 								)
 							)

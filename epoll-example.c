@@ -120,7 +120,7 @@ int net_epoll_listen(char* port, int conns)
     }
 
   event.data.fd = sfd;
-  event.events = EPOLLIN | EPOLLET;
+  event.events = EPOLLIN | EPOLLET; // only for listenning 
   s = epoll_ctl (efd, EPOLL_CTL_ADD, sfd, &event);
   if (s == -1)
     {
@@ -249,7 +249,7 @@ int epoll_get_fd_index ()
 
 int epoll_check_events_flags()
 {
-	if( (events[fd_index].events & EPOLLERR) || (events[fd_index].events & EPOLLHUP) || (!(events[fd_index].events & EPOLLIN))) return 1;
+	if( (events[fd_index].events & EPOLLRDHUP) ||  (events[fd_index].events & EPOLLERR) || (events[fd_index].events & EPOLLHUP) || (!(events[fd_index].events & EPOLLIN))) return 1;
 	else return 0;
 }
 
@@ -259,10 +259,36 @@ int epoll_sfd_cmp( int cmp_sfd)
 	else return 0;
 }
 
+int epoll_ctl_add_fd( int _fd)
+{
+	event.data.fd = _fd;
+    event.events =  EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET; 
+	s = epoll_ctl (efd, EPOLL_CTL_ADD, _fd, &event);
+	if (s == -1)
+	{
+		perror ("epoll_ctl");
+		return s;
+	}
+	return 0;
+}
+
+int epoll_ctl_del_fd( int _fd)
+{
+	// This maybe will hang the epoll_wait forever,as I am not sure of it
+	s = epoll_ctl (efd, EPOLL_CTL_DEL, _fd, NULL); // since kernel 2.6.9, can use NULL 
+	if (s == -1)
+	{
+		perror ("epoll_ctl del ");
+		return s;
+	}
+	return 0;
+}
+
 int kill_fd(int _fd)
 {
 	shutdown(_fd, SHUT_RDWR);
 }
+
 #ifdef TEST
 
 int main (int argc, char *argv[])
