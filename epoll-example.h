@@ -12,13 +12,16 @@
 
 #define MAXEVENTS 20
 #define MAXLISTEN 20
+void add_active_fd(int _fd);// put the actived tcp accepted socket fd in to an array
+void del_active_fd(int _fd);
 int make_socket_blocking (int _sfd);
 int make_socket_non_blocking (int _sfd);
+int create_and_connect(char*host,char*port);
 int create_and_bind (char *port);
 int net_epoll_listen(char* port, int conns);
 int net_epoll_wait ();
 int net_epoll_accept();
-int net_epoll_read (char*buf, int read_length);
+int net_epoll_read (int _fd, char*buf, int read_length);
 int net_epoll_write(int _fd, char*buf, int length);
 
 void epoll_set_fd_index (int n);
@@ -32,6 +35,8 @@ int epoll_ctl_add_fd( int _fd);
 int epoll_ctl_del_fd( int _fd);
 
 int kill_fd(int );
+int epoll_init();
+
 
   int sfd, s;
   int efd;
@@ -40,5 +45,6 @@ int kill_fd(int );
   struct epoll_event  event;
   struct epoll_event *events;
 
+  int cfd;// for connections to the log server
 #endif
   

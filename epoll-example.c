@@ -4,7 +4,46 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "epoll-example.h"
+
+int active_fds[MAXEVENTS];
+void add_active_fd(int _fd)
+{
+  int i,u;
+  u = 0;
+  for(i=0;i<MAXEVENTS;i++)
+  {
+    if( active_fds[i] == _fd ) { u = 1; break;}
+  }
+  if(u == 0)
+  {
+    for(i=0;i<MAXEVENTS;i++)
+    {
+      if(active_fds[i] == 0)
+      {
+        active_fds[i] = _fd;
+        u = i;
+        break;
+      }
+    }
+  }
+}
+
+void del_active_fd(int _fd)
+{
+  int i;
+  for(i=0;i<MAXEVENTS;i++)
+  {
+    if(active_fds[i] == _fd)
+    {
+      active_fds[i] = 0;
+    }
+  }
+}
 
 int make_socket_blocking (int _sfd)
 {
@@ -50,12 +89,37 @@ int make_socket_non_blocking (int _sfd)
   return 0;
 }
 
+int create_and_connect(char*host,char*port)
+{
+  int sock;
+  struct sockaddr_in echoserver; 
+  if ((sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) 
+  {
+    fprintf(stderr,"Failed to create socket");
+    exit(-1);
+  }
+
+  memset(&echoserver, 0, sizeof(echoserver));       /* Clear struct */
+  echoserver.sin_family = AF_INET;                  /* Internet/IP */
+  echoserver.sin_addr.s_addr = inet_addr(host);  /* IP address */
+  echoserver.sin_port = htons(atoi(port));       /* server port */
+            /* Establish connection */
+  if (connect(sock,(struct sockaddr *) &echoserver, sizeof(echoserver)) < 0) 
+  {
+        fprintf(stderr,"Failed to connect with server");
+        return -1;
+  }
+
+  return sock;
+}
+
 int create_and_bind (char *port)
 {
   struct addrinfo hints;
   struct addrinfo *result, *rp;
   int _s, _sfd;
-
+	int flag ;
+	
   memset (&hints, 0, sizeof (struct addrinfo));
   hints.ai_family = AF_UNSPEC;     /* Return IPv4 and IPv6 choices */
   hints.ai_socktype = SOCK_STREAM; /* We want a TCP socket */
@@ -73,7 +137,14 @@ int create_and_bind (char *port)
       _sfd = socket (rp->ai_family, rp->ai_socktype, rp->ai_protocol);
       if (_sfd == -1)
         continue;
-
+	  /*
+		flag = 1;
+		if(setsockopt( _sfd, SOL_SOCKET, SO_REUSEADDR,
+                          (char *) &flag, sizeof(flag)) < 0) {
+                fprintf(stderr, "Can't set SO_REUSEADDR.\n");
+	        exit(1001);
+	    }
+	    */
       _s = bind (_sfd, rp->ai_addr, rp->ai_addrlen);
       if (_s == 0)
         {
@@ -93,6 +164,21 @@ int create_and_bind (char *port)
   freeaddrinfo (result);
 
   return _sfd;
+}
+
+int epoll_init()
+{
+  efd = epoll_create1 (0);
+  if (efd == -1)
+  {
+    perror ("epoll_create");
+    exit(efd);
+  }
+
+  events = calloc (MAXEVENTS, sizeof event);
+  if(!events) { perror ("epoll events calloc"); exit(-2); }
+
+  return efd;
 }
 
 int net_epoll_listen(char* port, int conns)
@@ -190,15 +276,15 @@ int net_epoll_accept( )
                     }
                     
                     //net_epoll_write( infd, ">\n", 2); /// first time to write 
-                    
+                    add_active_fd(infd);
                     return 0;
 }
 
-int net_epoll_read (char*buf, int read_length)
+int net_epoll_read (int _fd, char*buf, int read_length)
 {
                  ssize_t count;
  
-                 count = read ( net_epoll_get_fd(), buf, read_length );
+                 count = read ( _fd, buf, read_length );
                   if (count == -1)
                     {
                       /* If errno == EAGAIN, that means we have read all
@@ -266,7 +352,7 @@ int epoll_ctl_add_fd( int _fd)
 	s = epoll_ctl (efd, EPOLL_CTL_ADD, _fd, &event);
 	if (s == -1)
 	{
-		perror ("epoll_ctl");
+		perror ("epoll_ctl add");
 		return s;
 	}
 	return 0;
@@ -289,10 +375,25 @@ int kill_fd(int _fd)
 	shutdown(_fd, SHUT_RDWR);
 }
 
+void spit_to_all_active_clients(char*buf, int length)
+{
+  int i,_s;
+  for(i=0;i<MAXEVENTS;i++)
+  {
+    if(active_fds[i] != 0)
+    {
+      _s = net_epoll_write( active_fds[i], buf, length);
+    }
+  }
+  return;  
+}
+
 #ifdef TEST
 
 int main (int argc, char *argv[])
 {
+  FILE*pipe;
+  int pfd;
 
   if (argc != 2)
     {
@@ -301,6 +402,12 @@ int main (int argc, char *argv[])
     }
 
 	net_epoll_listen( argv[1], MAXLISTEN);
+
+  cfd = create_and_connect("127.0.0.1", "9001");
+  if(cfd < 0 ) exit(cfd);
+  s = make_socket_non_blocking(cfd);
+  if(s<0) return s;
+  else epoll_ctl_add_fd(cfd);
 
   /* The event loop */
   while (1)
@@ -315,10 +422,34 @@ int main (int argc, char *argv[])
 	    {
               /* An error has occured on this fd, or the socket is not
                  ready for reading (why were we notified then?) */
-	      fprintf (stderr, "epoll error\n");
+	      fprintf (stderr, "epoll error,%d\n", net_epoll_get_fd());
 	      close (net_epoll_get_fd());
+        del_active_fd(net_epoll_get_fd());
 	      //continue;
 	    }
+      else if(net_epoll_get_fd() == cfd) 
+      {
+        printf("in log server section %d\n",cfd);
+          int done2= -1;
+          while(1)
+          {
+            char buf2[512];
+            memset(buf2,0,512);
+            done2 =  net_epoll_read(net_epoll_get_fd() , buf2, sizeof(buf2));
+            if(done2 > 0)
+            {
+              printf("here from log:\n");
+              s = write (1, buf2, done2);
+              spit_to_all_active_clients(buf2,done2);
+            }else if (done2<=0) break;
+          }
+          if (done2==0)
+          {
+            printf("pipe closed\n");
+            close(cfd);
+          }
+
+      }
 		else if ( epoll_sfd_cmp( net_epoll_get_fd()))
 	    {
               /* We have a notification on the listening socket, which
@@ -336,7 +467,8 @@ int main (int argc, char *argv[])
               while (1)
                 {
 					char buf[512];
-					done = net_epoll_read( buf, sizeof(buf));
+          memset(buf,0,512);
+					done = net_epoll_read( net_epoll_get_fd(), buf, sizeof(buf));
 					if(done > 0)
 					{
 						s = write (1, buf, done);
@@ -355,6 +487,131 @@ int main (int argc, char *argv[])
         }
     }
 
+  pclose(pipe);
+  net_epoll_close();
+  return EXIT_SUCCESS;
+}
+#elif defined(TEST2)
+int file_exist (char *filename)
+{
+  struct stat buffer;   
+  return (stat (filename, &buffer) == 0);
+}
+
+int main (int argc, char *argv[])
+{
+  FILE*pipe;
+  int pfd;
+  int i;
+  char cmdstring[1024];
+
+  memset(active_fds,0, MAXEVENTS);
+  if (argc != 3)
+    {
+      fprintf (stderr, "Usage: %s [port] [logfile]\n", argv[0]);
+      exit (EXIT_FAILURE);
+    }
+
+  net_epoll_listen( argv[1], MAXLISTEN);
+
+  if(!file_exist(argv[2]))
+  {
+    fprintf(stderr, "Cannot open %s file. Try again later.\n",argv[2]);
+    exit(-1);
+  }
+  sprintf(cmdstring,"tail -f %s", argv[2]);
+  pipe = popen(cmdstring,"r");
+  if (pipe == NULL)
+  {
+    fprintf(stderr, "Cannot popen %s file. Try again later.\n",argv[2]);
+    exit(-1);
+  }
+  pfd = fileno(pipe);
+  make_socket_non_blocking(pfd);
+  epoll_ctl_add_fd( pfd);
+  /* The event loop */
+  while (1)
+    {
+      int n, i;
+
+   n = net_epoll_wait();
+     for (i = 0; i < n; i++)
+   {
+     epoll_set_fd_index(i);
+    if (epoll_check_events_flags())
+      {
+              /* An error has occured on this fd, or the socket is not
+                 ready for reading (why were we notified then?) */
+        fprintf (stderr, "epoll error,%d\n", net_epoll_get_fd());
+        close (net_epoll_get_fd());
+        del_active_fd(net_epoll_get_fd());
+        //continue;
+      }
+      else if(net_epoll_get_fd() == pfd) 
+      {
+        printf("in log section %d\n",pfd);
+          int done2= -1;
+          while(1)
+          {
+            char buf2[1024];
+            memset(buf2,0,1024);
+            done2 =  net_epoll_read(net_epoll_get_fd() , buf2, sizeof(buf2));
+            if(done2 > 0)
+            {
+              printf("here from log:\n");
+              s = write (1, buf2, done2);
+              spit_to_all_active_clients(buf2,strlen(buf2));
+            }else if (done2<=0) break;
+          }
+          if (done2==0)
+          {
+            printf("pipe closed\n");
+            close(pfd);
+            pclose(pipe);
+          }
+
+      }
+    else if ( epoll_sfd_cmp( net_epoll_get_fd()))
+      {
+              /* We have a notification on the listening socket, which
+                 means one or more incoming connections. */
+              while (1)
+                {
+                  if( net_epoll_accept() != 0) break;
+                }
+        
+      }
+      else 
+      {
+              int done = -1;
+        
+              while (1)
+                {
+                  char buf[512];
+                  memset(buf,0,512);
+                  done = net_epoll_read( net_epoll_get_fd(), buf, sizeof(buf));
+                 if(done > 0)
+                  {
+                    /*
+                      s = write (1, buf, done);
+                      s = net_epoll_write( net_epoll_get_fd(), buf, strlen(buf));
+                      s = net_epoll_write( net_epoll_get_fd(), ">\n", 2);
+                    */
+                  }
+                  else if(done <= 0 ) break;
+                }
+
+              if (done==0)
+                {
+                  printf ("Closed connection on descriptor %d\n",net_epoll_get_fd());
+                  close (net_epoll_get_fd());
+                  del_active_fd(net_epoll_get_fd());
+                }
+            }
+        }
+    }
+
+  pclose(pipe);
   net_epoll_close();
   return EXIT_SUCCESS;
 }
