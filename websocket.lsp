@@ -5,10 +5,7 @@
 
 (setq port "8080")
 
-(if-not  (file? "/home/cuu/Documents/newlisp_websockserver/sha1.so")
-	(begin (println "no sha1 library") (exit) )
-	(import "/home/cuu/Documents/newlisp_websockserver/sha1.so" "sha1_string")
-)
+(import "/usr/share/sha1.so" "sha1_string")
 
 (setq websocket_guid "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 (setq flag "\n")
@@ -149,8 +146,8 @@
 									(println "closing wesocket")
 									;(net-close connection)
 									
-									(close (net_epoll_get_fd))
-									(kill_fd (net_epoll_get_fd))
+									(epoll_close (net_epoll_get_fd))
+									;(kill_fd (net_epoll_get_fd))
 								)
 								(begin
 									(println "fin not 129: " fin " " opcode)									
@@ -164,7 +161,7 @@
 										(setq serial_str (to_modbus dataret))
 										(write_serial serial_str (length serial_str))
 
-										(setq dataret (ws_send (hex2string serial_str)))
+										(setq dataret (wsiencode (string "RESPONSE: " (hex2string serial_str))))
 										(net_epoll_write (net_epoll_get_fd) dataret (length dataret))
 										;(println (hextodecstr dataret))
 									)
@@ -173,35 +170,20 @@
 						)
 )
 
-(define (ws_send buff, b1 message b2 len n )
-	(println "ws_send: " buff)
-	(setq message "")
-	(setq b1 0x80)
-	(setq b1 (| b1 0x01))
-	(setq message (append  message (char b1)))
-	(setq b2 0)
-	(setq len (length buff))
-	(if (< len 126)
-		(begin
-			(setq b2 (| b2 len))
-			(setq message (append message (char b2)))
-		)
-		(and (> len 126) (< len 65535))
-		(begin
-			(setq b2 (| b2 126))
-			(setq n (pack "d" len))
-			(setq message (append message (char b2)))	
-			(setq message (append message n))
-		)
-		(begin
-			(setq b2 (| b2 127))
-			(setq n (pack "ld" len))
-			(setq message (append message (char b2)))
-			(setq message (append message n))
-		)
+(define (wsiencode buff, (header  "") b1 len)
+	(setq len (length  (string buff)))
+	(setq b1 (| 0x80 (& 0x1  0x0f)))
+	(println "len: " len  " b1:" b1)
+
+	(if (and (<= len 125) (> len 0))
+		(setq header (pack "b b" b1 len))
+		(and (> len 125) (< len 65536))
+		(setq header (pack "b b d"  b1 126 len))
+		(>= len 65536)
+		(setq header (pack "b b ld" b1 127 len))
 	)
-	(setq message (append message buff))
-					
+	(println "header: " (hex2string header))
+	(append header (string buff))
 )
 
 ;(set 'listen (net-listen port))

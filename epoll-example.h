@@ -29,14 +29,18 @@ int epoll_get_fd_index ();
 
 int net_epoll_get_fd();
 void net_epoll_close();
-int epoll_check_events_flags();
+int epoll_check_rd_hup();
+int epoll_check_error();
+
 int epoll_sfd_cmp( int );
 int epoll_ctl_add_fd( int _fd);
 int epoll_ctl_del_fd( int _fd);
 
 int kill_fd(int );
 int epoll_init();
+int socket_check(int fd);
 
+void epoll_close( int _fd);
 
   int sfd, s;
   int efd;

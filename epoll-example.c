@@ -324,6 +324,12 @@ void net_epoll_close()
   close (sfd);	
 }
 
+void epoll_close( int _fd)
+{
+  if( close(_fd) < 0)
+    perror("epoll_close");
+}
+
 void epoll_set_fd_index (int n)
 {
 	fd_index = n;
@@ -333,10 +339,17 @@ int epoll_get_fd_index ()
 	return fd_index;
 }
 
-int epoll_check_events_flags()
+int epoll_check_rd_hup()
 {
-	if( (events[fd_index].events & EPOLLRDHUP) ||  (events[fd_index].events & EPOLLERR) || (events[fd_index].events & EPOLLHUP) || (!(events[fd_index].events & EPOLLIN))) return 1;
+  if( (events[fd_index].events & EPOLLRDHUP) || (events[fd_index].events & EPOLLHUP) ) return 1;
+	//if( (events[fd_index].events & EPOLLRDHUP) ||  (events[fd_index].events & EPOLLERR) || (events[fd_index].events & EPOLLHUP) || (!(events[fd_index].events & EPOLLIN))) return 1;
 	else return 0;
+}
+
+int epoll_check_error()
+{
+  if( events[fd_index].events & EPOLLERR ) return 1;
+  else return 0;
 }
 
 int epoll_sfd_cmp( int cmp_sfd)
@@ -382,10 +395,42 @@ void spit_to_all_active_clients(char*buf, int length)
   {
     if(active_fds[i] != 0)
     {
+      if(socket_check(active_fds[i]) == 0)
       _s = net_epoll_write( active_fds[i], buf, length);
+      else 
+        perror("socket check spit_to_all_active_clients ");
+
     }
   }
   return;  
+}
+
+
+/* reading waiting errors on the socket
+ * return 0 if there's no, 1 otherwise
+ */
+int socket_check(int fd)
+{
+   int ret;
+   int code;
+   size_t len = sizeof(int);
+
+   ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &code, &len);
+
+   if ((ret || code)!= 0)
+      return 1;
+
+   return 0;
+}
+
+void show_socketfd_error(int _fd)
+{
+  int error = 0;
+  socklen_t errlen = sizeof(error);
+  if (getsockopt(_fd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen) == 0)
+  {
+    fprintf(stderr,"error = %s\n", strerror(error));
+  }
 }
 
 #ifdef TEST
@@ -418,15 +463,21 @@ int main (int argc, char *argv[])
      for (i = 0; i < n; i++)
 	 {
 		 epoll_set_fd_index(i);
-	  if (epoll_check_events_flags())
+	  if (epoll_check_rd_hup())
 	    {
               /* An error has occured on this fd, or the socket is not
                  ready for reading (why were we notified then?) */
-	      fprintf (stderr, "epoll error,%d\n", net_epoll_get_fd());
+        perror("epoll error check_event flags");
+        fprintf (stderr, "%d\n", net_epoll_get_fd());
+        show_socketfd_error(net_epoll_get_fd());
 	      close (net_epoll_get_fd());
         del_active_fd(net_epoll_get_fd());
 	      //continue;
-	    }
+	    }else if (epoll_check_error())
+      {
+        perror("epoll error");
+        continue;
+      }
       else if(net_epoll_get_fd() == cfd) 
       {
         printf("in log server section %d\n",cfd);
@@ -538,14 +589,19 @@ int main (int argc, char *argv[])
      for (i = 0; i < n; i++)
    {
      epoll_set_fd_index(i);
-    if (epoll_check_events_flags())
+    if (epoll_check_rd_hup())
       {
               /* An error has occured on this fd, or the socket is not
                  ready for reading (why were we notified then?) */
-        fprintf (stderr, "epoll error,%d\n", net_epoll_get_fd());
+        fprintf (stderr, "epoll rd hup error,%d\n", net_epoll_get_fd());
+        show_socketfd_error(net_epoll_get_fd());
         close (net_epoll_get_fd());
         del_active_fd(net_epoll_get_fd());
         //continue;
+      }else if (epoll_check_error())
+      {
+        perror("epoll error");
+        continue;
       }
       else if(net_epoll_get_fd() == pfd) 
       {
